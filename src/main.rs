@@ -49,54 +49,54 @@ fn main() {
 
     // Build the query. This effectively has the type `impl Future<String>`.
     let query = net::connect("nghttp2.org", 443, Duration::from_secs(10), &handle)
-        .map_err(Error::Tcp)
-        // Add TLS to the TCP stream
-        .and_then(|stream| tls(stream, "nghttp2.org").map_err(Error::Ssl))
-        // Establish h2 on the ssl stream
-        .and_then(|ssl_stream| {
-            ::h2::client::handshake(ssl_stream)
-                .map_err(Error::H2)
+    .map_err(Error::Tcp)
+    // Add TLS to the TCP stream
+    .and_then(|stream| tls(stream, "nghttp2.org").map_err(Error::Ssl))
+    // Establish h2 on the ssl stream
+    .and_then(|ssl_stream| {
+        ::h2::client::handshake(ssl_stream)
+        .map_err(Error::H2)
+    })
+    // And finally, send the HTTP request
+    .and_then(|(mut client, connection)| {
+        // Build the http::Request
+        let request = Request::builder()
+        .uri("https://nghttp2.org/httpbin/get")
+        .header("User-Agent", "h2-demo/0.1")
+        .body(())
+        .unwrap();
+
+        let (response_future, _stream) = client.send_request(request, true).unwrap();
+
+        let response = response_future
+        // When the response arrives..
+        .and_then(|res /* http::response::Response */| {
+            // Grab the ReceiveStream
+            let (_parts, recv_stream) = res.into_parts();
+
+            // Return a combinator which will buffer the response into a
+            // String.
+            BufferResponse::new(recv_stream)
         })
-        // And finally, send the HTTP request
-        .and_then(|(mut client, connection)| {
-            // Build the http::Request
-            let request = Request::builder()
-                .uri("https://nghttp2.org/httpbin/get")
-                .header("User-Agent", "h2-demo/0.1")
-                .body(())
-                .unwrap();
+        // Or if there's an error, convert to the unified error type
+        .map_err(Error::H2)
+        .and_then(|response| {
+            // And print the result
+            println!("Response: {}", String::from_utf8(response).unwrap());
 
-            let (response_future, _stream) = client.send_request(request, true).unwrap();
-
-            let response = response_future
-                // When the response arrives..
-                .and_then(|res /* http::response::Response */| {
-                    // Grab the ReceiveStream
-                    let (_parts, recv_stream) = res.into_parts();
-
-                    // Return a combinator which will buffer the response into a
-                    // String.
-                    BufferResponse::new(recv_stream)
-                })
-                // Or if there's an error, convert to the unified error type
-                .map_err(Error::H2)
-                .and_then(|response| {
-                    // And print the result
-                    println!("Response: {}", String::from_utf8(response).unwrap());
-
-                    ok::<(), Error>(())
-                });
-
-            // Spawn a task to run the connection
-            //
-            // If receiving connection errors is important, they should be
-            // sent back to the controlling task instead of simply printing.
-            handle.spawn(response.map_err(|err| println!("err: {:?}", err)));
-
-            connection.map_err(Error::H2)
+            ok::<(), Error>(())
         });
 
-        println!("querying");
+        // Spawn a task to run the connection
+        //
+        // If receiving connection errors is important, they should be
+        // sent back to the controlling task instead of simply printing.
+        handle.spawn(response.map_err(|err| println!("err: {:?}", err)));
+
+        connection.map_err(Error::H2)
+    });
+
+    println!("querying");
     // Run the query to completion
     io_loop.run(query).unwrap();
     println!("Finished query!");
@@ -116,16 +116,16 @@ macro_rules! either_try {
 
 /// Wrap a TcpStream with TLS
 fn tls(stream: TcpStream, host: &str)
-    // `impl Future<Item=SslStream<TcpStream>, Error=ssl::Error>`
-    -> Either<ConnectAsync<TcpStream>, FutureResult<SslStream<TcpStream>, ssl::Error>>
+// `impl Future<Item=SslStream<TcpStream>, Error=ssl::Error>`
+-> Either<ConnectAsync<TcpStream>, FutureResult<SslStream<TcpStream>, ssl::Error>>
 {
     let mut builder = either_try!(SslConnectorBuilder::new(SslMethod::tls()));
     either_try!(builder.set_alpn_protocols(&[b"h2"]));
 
     let connect_async = builder
-        .build()
-        // The domain name is important here for SNI
-        .connect_async(host, stream);
+    .build()
+    // The domain name is important here for SNI
+    .connect_async(host, stream);
 
     Either::A(connect_async)
 }
@@ -156,11 +156,11 @@ struct BufferResponse {
 impl BufferResponse {
     /// Create the BufferResponse combinator
     pub fn new(stream: RecvStream) -> Self {
-         Self {
+        Self {
             stream,
             stream_done: false,
             buf: Vec::new(),
-         }
+        }
     }
 }
 
