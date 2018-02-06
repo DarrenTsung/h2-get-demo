@@ -11,9 +11,9 @@
 //! [tokio-openssl]: https://docs.rs/tokio-openssl/
 extern crate h2;
 extern crate openssl;
+extern crate tokio_core;
 extern crate tokio_openssl;
 extern crate trust_dns_resolver;
-extern crate tokio_core;
 #[macro_use] extern crate futures;
 extern crate http;
 #[macro_use] extern crate failure;
@@ -21,7 +21,7 @@ extern crate http;
 use std::time::Duration;
 
 use futures::{Poll, Future, Stream, Async};
-use futures::future::{Either, FutureResult};
+use futures::future::{ok, Either, FutureResult};
 
 use h2::RecvStream;
 
@@ -48,7 +48,7 @@ fn main() {
     let handle = io_loop.handle();
 
     // Build the query. This effectively has the type `impl Future<String>`.
-    let query = net::connect("nghttp2.org.", 443, Duration::from_secs(10), &handle)
+    let query = net::connect("nghttp2.org", 443, Duration::from_secs(10), &handle)
         .map_err(Error::Tcp)
         // Add TLS to the TCP stream
         .and_then(|stream| tls(stream, "nghttp2.org").map_err(Error::Ssl))
@@ -68,20 +68,9 @@ fn main() {
 
             let (response_future, _stream) = client.send_request(request, true).unwrap();
 
-            // Spawn a task to run the connection
-            //
-            // If receiving connection errors is important, they should be
-            // sent back to the controlling task instead of simply printing.
-            handle.spawn(connection.map_err(|e| eprintln!("conn error: {}", e)));
-
-            response_future
+            let response = response_future
                 // When the response arrives..
                 .and_then(|res /* http::response::Response */| {
-                    // Prints the Debug information for this response -- status,
-                    // HTTP version, and headers. The body is a future::Stream
-                    // of bytes.
-                    println!("Response: {:?}", res);
-
                     // Grab the ReceiveStream
                     let (_parts, recv_stream) = res.into_parts();
 
@@ -91,13 +80,26 @@ fn main() {
                 })
                 // Or if there's an error, convert to the unified error type
                 .map_err(Error::H2)
+                .and_then(|response| {
+                    // And print the result
+                    println!("Response: {}", String::from_utf8(response).unwrap());
+
+                    ok::<(), Error>(())
+                });
+
+            // Spawn a task to run the connection
+            //
+            // If receiving connection errors is important, they should be
+            // sent back to the controlling task instead of simply printing.
+            handle.spawn(response.map_err(|err| println!("err: {:?}", err)));
+
+            connection.map_err(Error::H2)
         });
 
+        println!("querying");
     // Run the query to completion
-    let response = io_loop.run(query).unwrap();
-
-    // And print the result
-    println!("{}", String::from_utf8(response).unwrap());
+    io_loop.run(query).unwrap();
+    println!("Finished query!");
 }
 
 /// Helper when returning an `Either` future where the B variant is an immediate Error.
@@ -171,7 +173,7 @@ impl Future for BufferResponse {
     //
     // It's also important to receive any trailers that may arrive, but for the
     // purposes of this demo, they are not returned.
-    fn poll(&mut self) -> Poll<Self::Item, h2::Error> {
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
             if self.stream_done {
                 // Get any trailers (like headers, but afterwards)
@@ -194,5 +196,3 @@ impl Future for BufferResponse {
         }
     }
 }
-
-

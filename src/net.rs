@@ -1,18 +1,18 @@
-use std::time::Duration;
+use std::collections::VecDeque;
 use std::io;
 use std::net::{SocketAddr, IpAddr};
-use std::collections::VecDeque;
+use std::time::Duration;
 
-use trust_dns_resolver::ResolverFuture;
 use trust_dns_resolver::config::*;
 use trust_dns_resolver::lookup_ip::{LookupIp};
+use trust_dns_resolver::ResolverFuture;
 
-use tokio_core::reactor::Handle;
 use tokio_core::net::{TcpStream, TcpStreamNew};
+use tokio_core::reactor::Handle;
 use tokio_core::reactor::Timeout;
 
-use futures::future::{self, Future, Either};
 use futures::{Async, Poll, done};
+use futures::future::{self, Future, Either};
 
 /// Error from establishing a connection.
 #[derive(Debug, Fail)]
